@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detektor Tangan AI</title>
+    <style>
+        /* CSS: Mengatur Tampilan */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        h1 { margin-bottom: 10px; }
+
+        .canvas-wrapper {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border: 4px solid #00d2ff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0, 210, 255, 0.5);
+            background: #000;
+        }
+
+        /* Video asli disembunyikan (kita gambar ulang di canvas) atau ditumpuk */
+        video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1); /* Efek cermin */
+            z-index: 1;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1); /* Efek cermin agar sinkron dengan video */
+            z-index: 2;
+        }
+
+        #status {
+            margin-top: 15px;
+            font-size: 1.2rem;
+            color: #00d2ff;
+        }
+
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #00d2ff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <h1>Detektor Tangan Real-Time</h1>
+    
+    <div class="canvas-wrapper">
+        <video id="video" playsinline></video>
+        <canvas id="output"></canvas>
+    </div>
+
+    <div id="status">
+        <div class="loader"></div> Memuat Model AI...
+    </div>
+
+    <script src="https://unpkg.com/@tensorflow/tfjs-core@2.1.0/dist/tf-core.js"></script>
+    <script src="https://unpkg.com/@tensorflow/tfjs-converter@2.1.0/dist/tf-converter.js"></script>
+    <script src="https://unpkg.com/@tensorflow/tfjs-backend-webgl@2.1.0/dist/tf-backend-webgl.js"></script>
+    <script src="https://unpkg.com/@tensorflow-models/handpose@0.0.6/dist/handpose.js"></script>
+
+    <script>
+        // JAVASCRIPT: Logika Deteksi
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('output');
+        const ctx = canvas.getContext('2d');
+        const statusText = document.getElementById('status');
+
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                'audio': false,
+                'video': { width: 640, height: 480 }
+            });
+            video.srcObject = stream;
+            
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    video.play();
+                    // Sesuaikan ukuran canvas dengan video
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    resolve(video);
+                };
+            });
+        }
+
+        async function main() {
+            // 1. Setup Kamera
+            await setupCamera();
+
+            // 2. Load Model Handpose
+            const model = await handpose.load();
+            statusText.innerHTML = "✅ Sistem Siap! Arahkan tangan ke kamera.";
+            statusText.style.color = "#00ff88";
+
+            // 3. Loop Deteksi
+            async function detect() {
+                // Prediksi posisi tangan
+                const predictions = await model.estimateHands(video);
+
+                // Bersihkan canvas dan gambar frame video
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Kita tidak menggambar video ke canvas (ctx.drawImage) karena video elemen sudah ada di HTML
+                // Kita hanya menggambar overlay titik-titik tangan
+
+                if (predictions.length > 0) {
+                    predictions.forEach(prediction => {
+                        // Gambar titik-titik jari (Landmarks)
+                        const landmarks = prediction.landmarks;
+                        
+                        // Gambar garis antar titik (tulang jari)
+                        drawSkeleton(ctx, landmarks);
+
+                        // Gambar titik merah di setiap sendi
+                        for (let i = 0; i < landmarks.length; i++) {
+                            const x = landmarks[i][0];
+                            const y = landmarks[i][1];
+                            
+                            ctx.beginPath();
+                            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+                            ctx.fillStyle = "#ff0055"; // Warna titik
+                            ctx.fill();
+                        }
+                    });
+                }
+
+                requestAnimationFrame(detect);
+            }
+
+            detect();
+        }
+
+        // Fungsi bantuan untuk menggambar garis tulang jari
+        function drawSkeleton(ctx, landmarks) {
+            const fingerLookupIndices = {
+                thumb: [0, 1, 2, 3, 4],
+                indexFinger: [0, 5, 6, 7, 8],
+                middleFinger: [0, 9, 10, 11, 12],
+                ringFinger: [0, 13, 14, 15, 16],
+                pinky: [0, 17, 18, 19, 20]
+            };
+            
+            ctx.strokeStyle = "#00d2ff"; // Warna garis
+            ctx.lineWidth = 2;
+
+            for (const finger in fingerLookupIndices) {
+                const points = fingerLookupIndices[finger].map(idx => landmarks[idx]);
+                
+                ctx.beginPath();
+                ctx.moveTo(points[0][0], points[0][1]);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i][0], points[i][1]);
+                }
+                ctx.stroke();
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
